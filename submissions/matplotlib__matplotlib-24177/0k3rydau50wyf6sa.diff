@@ -1,0 +1,12 @@
+diff --git a/lib/matplotlib/axes/_axes.py b/lib/matplotlib/axes/_axes.py
+--- a/lib/matplotlib/axes/_axes.py
++++ b/lib/matplotlib/axes/_axes.py
+@@ -6739,6 +6739,8 @@
+         density = bool(density)
+         if density and not stacked:
+             hist_kwargs['density'] = density
++        else:
++            hist_kwargs['density'] = False
+ 
+         # List to store all the top coordinates of the histograms
+         tops = []  # Will have shape (n_datasets, n_bins).
