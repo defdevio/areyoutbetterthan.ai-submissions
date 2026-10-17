@@ -1,0 +1,128 @@
+name: validate
+
+# Validates candidate tasks on GitHub-hosted runners before they are offered to humans:
+#   gold patch  -> must be resolved
+#   no-op patch -> must be unresolved (FAIL_TO_PASS tests really fail without a fix)
+# and the task image must fit the runner's disk and time budget.
+#
+# Trigger from the app repo with `pnpm data:validate dispatch`, which batches the
+# candidate pool and later collects the `validation-*` artifacts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_ids:
+        description: JSON array of instance ids
+        required: true
+      harness_version:
+        description: swebench package version
+        default: "5.0.2"
+
+permissions:
+  contents: read
+
+env:
+  DATASET: SWE-bench/SWE-bench_Verified
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  validate:
+    name: ${{ matrix.instance_id }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        instance_id: ${{ fromJSON(inputs.instance_ids) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        run: bash scripts/free_disk.sh
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install SWE-bench harness
+        env:
+          HARNESS_VERSION: ${{ inputs.harness_version }}
+        run: python -m pip install --quiet "swebench==${HARNESS_VERSION}"
+
+      - name: Gold patch
+        env:
+          INSTANCE_ID: ${{ matrix.instance_id }}
+        run: |
+          start=$(date +%s)
+          python -m swebench.harness.run_evaluation --dataset_name "$DATASET" \
+            --predictions_path gold --instance_ids "$INSTANCE_ID" --max_workers 1 \
+            --timeout 1200 --run_id gold --report_dir reports || true
+          python3 scripts/classify.py --run-id gold --model gold --instance-id "$INSTANCE_ID" \
+            --dataset "$DATASET" --duration $(( $(date +%s) - start )) --out out/gold.json
+
+      - name: No-op patch
+        env:
+          INSTANCE_ID: ${{ matrix.instance_id }}
+        run: |
+          start=$(date +%s)
+          python3 scripts/make_predictions.py --instance-id "$INSTANCE_ID" --noop --model noop \
+            --out noop.jsonl
+          python -m swebench.harness.run_evaluation --dataset_name "$DATASET" \
+            --predictions_path noop.jsonl --instance_ids "$INSTANCE_ID" --max_workers 1 \
+            --timeout 1200 --run_id noop --report_dir reports || true
+          python3 scripts/classify.py --run-id noop --model noop --instance-id "$INSTANCE_ID" \
+            --dataset "$DATASET" --duration $(( $(date +%s) - start )) --out out/noop.json
+
+      - name: Record
+        if: always()
+        env:
+          INSTANCE_ID: ${{ matrix.instance_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, shutil, subprocess, datetime
+          from importlib import metadata
+          from pathlib import Path
+          iid = os.environ["INSTANCE_ID"]
+          def load(name):
+              p = Path(f"out/{name}.json")
+              if not p.exists():
+                  return {"outcome": "infra_error", "reason": "not_run"}
+              r = json.loads(p.read_text())
+              return {"outcome": r["outcome"], "reason": r.get("reason"), "duration_s": r.get("duration_s")}
+          size = None
+          try:
+              images = subprocess.run(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
+                                      capture_output=True, text=True).stdout.split()
+              image = next((i for i in images if "sweb.eval" in i), None)
+              if image:
+                  size = int(subprocess.run(["docker", "image", "inspect", "--format", "{{.Size}}", image],
+                                            capture_output=True, text=True).stdout.strip())
+          except Exception:
+              pass
+          record = {
+              "instance_id": iid,
+              "gold": load("gold"),
+              "noop": load("noop"),
+              "image_size_bytes": size,
+              "disk_free_bytes_after": shutil.disk_usage("/").free,
+              "harness_version": metadata.version("swebench"),
+              "run_url": os.environ["RUN_URL"],
+              "validated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+          }
+          Path("out").mkdir(exist_ok=True)
+          Path("out/validation.json").write_text(json.dumps(record, indent=2))
+          print(json.dumps(record, indent=2))
+          EOF
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: validation-${{ matrix.instance_id }}
+          path: out/
+          retention-days: 30

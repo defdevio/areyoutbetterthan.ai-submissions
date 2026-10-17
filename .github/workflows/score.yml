@@ -1,0 +1,150 @@
+name: score
+
+# Scores one human submission with the official SWE-bench harness.
+#
+# PRs are opened by the areyoubetterthan.ai GitHub App. The user's diff is data: it is
+# only ever applied inside the SWE-bench Docker container on this ephemeral runner.
+# This workflow has no secrets and a read-only token. The app reads result.json from
+# the `result` artifact via the workflow_run webhook, then closes the PR.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+    paths: ["submissions/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: score-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SWEBENCH_VERSION: "5.0.2"
+  DATASET: SWE-bench/SWE-bench_Verified
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  score:
+    # Only bot-authored, same-repo PRs are scored. Everything else is skipped without
+    # spending a runner.
+    if: >-
+      github.event.pull_request.user.login == vars.BOT_LOGIN &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Guard
+        id: guard
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python3 scripts/guard.py --base "$BASE_SHA" --head "$HEAD_SHA"
+
+      - name: Free disk space
+        run: bash scripts/free_disk.sh
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install SWE-bench harness
+        run: python -m pip install --quiet "swebench==${SWEBENCH_VERSION}"
+
+      - name: Build predictions
+        env:
+          INSTANCE_ID: ${{ steps.guard.outputs.instance_id }}
+          DIFF_PATH: ${{ steps.guard.outputs.diff_path }}
+        run: |
+          python3 scripts/make_predictions.py --instance-id "$INSTANCE_ID" \
+            --patch-file "$DIFF_PATH" --out predictions.jsonl
+
+      - name: Run evaluation
+        id: eval
+        env:
+          INSTANCE_ID: ${{ steps.guard.outputs.instance_id }}
+          RUN_ID: pr-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
+        run: |
+          start=$(date +%s)
+          set +e
+          python -m swebench.harness.run_evaluation \
+            --dataset_name "$DATASET" \
+            --predictions_path predictions.jsonl \
+            --instance_ids "$INSTANCE_ID" \
+            --max_workers 1 \
+            --timeout 1200 \
+            --run_id "$RUN_ID" \
+            --report_dir reports
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          echo "duration=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Classify
+        id: classify
+        if: always() && steps.guard.outcome == 'success'
+        env:
+          INSTANCE_ID: ${{ steps.guard.outputs.instance_id }}
+          SUBMISSION_ID: ${{ steps.guard.outputs.submission_id }}
+          RUN_ID: ${{ steps.eval.outputs.run_id || format('pr-{0}-{1}', github.event.pull_request.number, github.run_attempt) }}
+          DURATION: ${{ steps.eval.outputs.duration || '0' }}
+        run: |
+          python3 scripts/classify.py --run-id "$RUN_ID" --instance-id "$INSTANCE_ID" \
+            --submission-id "$SUBMISSION_ID" --dataset "$DATASET" --duration "$DURATION" \
+            --out out/result.json
+          echo "outcome=$(python3 -c 'import json;print(json.load(open("out/result.json"))["outcome"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload result
+        if: always() && steps.classify.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: result
+          path: out/result.json
+          retention-days: 30
+
+      - name: Upload logs
+        if: always() && steps.guard.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: logs
+          path: |
+            logs/run_evaluation/
+            reports/
+            predictions.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Summary
+        if: always() && steps.classify.outcome == 'success'
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          r = json.load(open("out/result.json"))
+          icon = {"resolved": "✅", "unresolved": "❌", "patch_apply_failed": "❌", "infra_error": "⚠️"}[r["outcome"]]
+          print(f"## {icon} `{r['instance_id']}`: {r['outcome']}")
+          if r.get("reason"):
+              print(f"\nReason: `{r['reason']}`")
+          t = r.get("tests") or {}
+          if t:
+              f2p, p2p = t["fail_to_pass"], t["pass_to_pass"]
+              print(f"\n| | passed | failed |\n|---|---|---|")
+              print(f"| FAIL_TO_PASS | {f2p['passed_count']} | {f2p['failed_count']} |")
+              print(f"| PASS_TO_PASS | {p2p['passed_count']} | {p2p['failed_count']} |")
+          print(f"\nHarness: swebench {r['harness']['version']} on {r['harness']['dataset']}")
+          EOF
+
+      - name: Fail on infrastructure error
+        if: steps.classify.outputs.outcome == 'infra_error'
+        run: |
+          echo "::error::infrastructure error, see result.json"
+          exit 1
