@@ -1,0 +1,1 @@
+# areyoutbetterthan.ai-submissions
