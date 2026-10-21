@@ -1,0 +1,16 @@
+diff --git a/sklearn/ensemble/voting.py b/sklearn/ensemble/voting.py
+--- a/sklearn/ensemble/voting.py
++++ b/sklearn/ensemble/voting.py
+@@ -69,6 +69,12 @@
+             raise AttributeError('Invalid `estimators` attribute, `estimators`'
+                                  ' should be a list of (string, estimator)'
+                                  ' tuples')
++        
++        for estimator in self.estimators:
++            if estimator is None:
++                raise AttributeError('Invalid `estimator` attribute, `estimators`'
++                    ' should be a list of (string, estimator) with non `None` values' 
++                    ' tuples')
+ 
+         if (self.weights is not None and
+                 len(self.weights) != len(self.estimators)):
