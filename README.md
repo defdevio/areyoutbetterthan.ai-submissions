@@ -31,7 +31,10 @@ The app then reads the result and closes the PR. PRs are never merged.
 
 - The diff is **data**. It is only applied inside the SWE-bench container on an ephemeral
   runner. It is never applied to this repository or executed by the workflow itself.
-- `score.yml` has **no secrets** and `permissions: contents: read`.
+- `score.yml` has `permissions: contents: read`. Its only secret is `HF_TOKEN`, passed
+  solely to the evaluation step so the harness can download the dataset with higher rate
+  limits. The guard ensures that step only runs base-branch code plus the two added
+  submission files.
 - The job only runs when the PR author is the bot (`vars.BOT_LOGIN`) and the head branch
   lives in this repository.
 - Required repository settings:

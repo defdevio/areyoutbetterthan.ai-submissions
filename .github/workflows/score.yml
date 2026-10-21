@@ -4,7 +4,8 @@ name: score
 #
 # PRs are opened by the areyoubetterthan.ai GitHub App. The user's diff is data: it is
 # only ever applied inside the SWE-bench Docker container on this ephemeral runner.
-# This workflow has no secrets and a read-only token. The app reads result.json from
+# The only secret is HF_TOKEN, scoped to the evaluation step (dataset downloads). The workflow's
+# GITHUB_TOKEN is read-only. The app reads result.json from
 # the `result` artifact via the workflow_run webhook, then closes the PR.
 
 on:
@@ -72,6 +73,7 @@ jobs:
         env:
           INSTANCE_ID: ${{ steps.guard.outputs.instance_id }}
           RUN_ID: pr-${{ github.event.pull_request.number }}-${{ github.run_attempt }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           start=$(date +%s)
           set +e
