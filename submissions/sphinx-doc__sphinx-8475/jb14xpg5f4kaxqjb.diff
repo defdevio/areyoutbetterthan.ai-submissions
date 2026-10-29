@@ -1,0 +1,12 @@
+diff --git a/sphinx/builders/linkcheck.py b/sphinx/builders/linkcheck.py
+--- a/sphinx/builders/linkcheck.py
++++ b/sphinx/builders/linkcheck.py
+@@ -186,7 +186,7 @@
+                     # We'll take "Service Unavailable" as ignored.
+                     return 'ignored', str(err), 0
+                 else:
+-                    return 'broken', str(err), 0
++                    return 'too many redirects', str(err), 0
+             except Exception as err:
+                 return 'broken', str(err), 0
+             if response.url.rstrip('/') == req_url.rstrip('/'):
