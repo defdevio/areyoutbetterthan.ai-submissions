@@ -1,0 +1,12 @@
+diff --git a/sympy/calculus/util.py b/sympy/calculus/util.py
+--- a/sympy/calculus/util.py
++++ b/sympy/calculus/util.py
+@@ -145,7 +145,7 @@
+     period = periodicity(f, symbol)
+     if period == S.Zero:
+         # the expression is constant wrt symbol
+-        return FiniteSet(f.expand())
++        return ImageSet(f.expand())
+ 
+     if period is not None:
+         if isinstance(domain, Interval):
