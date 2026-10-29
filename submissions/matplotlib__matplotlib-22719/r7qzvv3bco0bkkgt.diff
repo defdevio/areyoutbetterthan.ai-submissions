@@ -1,0 +1,12 @@
+diff --git a/lib/matplotlib/tests/test_units.py b/lib/matplotlib/tests/test_units.py
+--- a/lib/matplotlib/tests/test_units.py
++++ b/lib/matplotlib/tests/test_units.py
+@@ -252,7 +252,7 @@
+     assert ax.get_ylim() == (0, 4)
+ 
+     fig, ax = plt.subplots()
+-    ax.xaxis.update_units(Quantity([10], "miles"))
++    ax.xaxis.convert_units(Quantity([10], "miles"))
+     ax.axhline(30)
+     fig.draw_without_rendering()
+     assert ax.get_xlim() == (0, 100)
