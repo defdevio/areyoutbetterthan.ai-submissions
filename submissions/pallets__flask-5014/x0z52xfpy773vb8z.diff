@@ -1,0 +1,12 @@
+diff --git a/src/flask/app.py b/src/flask/app.py
+--- a/src/flask/app.py
++++ b/src/flask/app.py
+@@ -1242,7 +1242,7 @@
+         class, or ``None`` if a suitable handler is not found.
+         """
+         exc_class, code = self._get_exc_class_and_code(type(e))
+-        names = (*request.blueprints, None)
++        names = [name for name in (*request.blueprints, None) if name]
+ 
+         for c in (code, None) if code is not None else (None,):
+             for name in names:
